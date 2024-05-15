@@ -2,10 +2,10 @@ from os import path
 from os import environ
 from os import pathsep
 from scripts import GazeboRosPaths
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, get_package_prefix
 
 from launch import LaunchDescription
-from launch.actions import (IncludeLaunchDescription, SetEnvironmentVariable, 
+from launch.actions import (IncludeLaunchDescription, SetEnvironmentVariable,
                             DeclareLaunchArgument, ExecuteProcess, Shutdown, 
                             RegisterEventHandler, TimerAction, LogInfo)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.event_handlers import (OnExecutionComplete, OnProcessExit,
                                 OnProcessIO, OnProcessStart, OnShutdown)
+from launch_pal.include_utils import include_launch_py_description
 
 def generate_launch_description():
 
@@ -100,6 +101,22 @@ def generate_launch_description():
         )
     )
 
+    # pmb2_state_publisher = include_launch_py_description('pmb2_description',
+    #                                                      ['launch',
+    #                                                       'robot_state_publisher.launch.py'])
+    # spawn_entity = Node(package='gazebo_ros', executable='spawn_entity.py',
+    #                     arguments=['-topic', 'robot_description',
+    #                                '-entity', LaunchConfiguration(
+    #                                    'robot_name'),
+    #                                # LaunchConfiguration('gzpose'),
+    #                                ],
+    #                     output='screen')
+
+
+    pmb2_pkg_path = get_package_prefix('pmb2_description')
+    pmb2_model_path = path.join(pmb2_pkg_path, "share")
+    pmb2_resource_path = pmb2_pkg_path
+
     # Then, launch the generated world in Gazebo 
     my_gazebo_models = PathJoinSubstitution([
         FindPackageShare('hunav_gazebo_wrapper'),
@@ -112,25 +129,26 @@ def generate_launch_description():
 
     
     model, plugin, media = GazeboRosPaths.get_paths()
-    #print('model:', model)
+
 
     if 'GAZEBO_MODEL_PATH' in environ:
-        model += pathsep+environ['GAZEBO_MODEL_PATH']
+        pmb2_model_path += pathsep+environ['GAZEBO_MODEL_PATH'] #+ pathsep + model
     if 'GAZEBO_PLUGIN_PATH' in environ:
         plugin += pathsep+environ['GAZEBO_PLUGIN_PATH']
     if 'GAZEBO_RESOURCE_PATH' in environ:
-        media += pathsep+environ['GAZEBO_RESOURCE_PATH']
+        pmb2_resource_path += pathsep+environ['GAZEBO_RESOURCE_PATH'] #+ pathsep + media
 
+    #print('pmb2_model_path:', pmb2_model_path)
     env = {
         'GAZEBO_MODEL_PATH': model,
         'GAZEBO_PLUGIN_PATH': plugin,
         'GAZEBO_RESOURCE_PATH': media
     }
-    print('env:', env)
+    # print('env:', env)
 
     set_env_gazebo_model = SetEnvironmentVariable(
         name='GAZEBO_MODEL_PATH', 
-        value=[EnvironmentVariable('GAZEBO_MODEL_PATH'), my_gazebo_models]
+        value=[EnvironmentVariable('GAZEBO_MODEL_PATH'), pmb2_model_path, my_gazebo_models]
     )
     set_env_gazebo_resource = SetEnvironmentVariable(
         name='GAZEBO_RESOURCE_PATH', 
@@ -150,9 +168,8 @@ def generate_launch_description():
 
     gzserver_cmd = [
         use_nvidia_gpu,
-        'gzserver ',
-        '--pause ',
-        # Pass through arguments to gzserver
+        'gzserver',
+        #'--pause ',
          world_path, 
         _boolean_command('verbose'), '',
         '-s ', 'libgazebo_ros_init.so',
@@ -171,8 +188,8 @@ def generate_launch_description():
     gzserver_process = ExecuteProcess(
         cmd=gzserver_cmd,
         output='screen',
-        #additional_env=env,
-        shell=True,
+        additional_env=env,
+        shell=True, # False in "gazebo_ros" launch
         on_exit=Shutdown(),
         #condition=IfCondition(LaunchConfiguration('server_required')),
     )
@@ -180,31 +197,17 @@ def generate_launch_description():
     gzclient_process = ExecuteProcess(
         cmd=gzclient_cmd,
         output='screen',
-        #additional_env=env,
-        shell=True,
+        additional_env=env,
+        shell=True, # False in "gazebo_ros" launch 
         on_exit=Shutdown(),
         #condition=IfCondition(LaunchConfiguration('server_required')),
     )
 
-    
-
-    # Finally, spawn the pmb2 robot in Gazebo
-    gazebo_spawn = PathJoinSubstitution(
-        [FindPackageShare("pmb2_gazebo"),
-        "launch",
-        "pmb2_spawn.launch.py"],
-    )
-
-    spawn_robot = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([gazebo_spawn]),
-        launch_arguments={'robot_namespace': namespace,
-                        'laser_model': scan_model, 
-                        'rgbd_sensors': use_rgbd,
-                        'gzpose_x': gz_x,
-                        'gzpose_y': gz_y,
-                        'gzpose_Y': gz_Y}.items(),
-    )
-
+    # gazebo = IncludeLaunchDescription(
+    #     PythonLaunchDescriptionSource([path.join(
+    #         get_package_share_directory('gazebo_ros'), 'launch'), '/gazebo.launch.py']),
+    #     launch_arguments={'world': world_path}.items(),
+    # )
     # Do not launch Gazebo until the world has been generated
     ordered_launch_event2 = RegisterEventHandler(
         OnProcessStart(
@@ -219,6 +222,26 @@ def generate_launch_description():
         )
     )
 
+    # Finally, spawn the pmb2 robot in Gazebo
+    pmb2_spawn = include_launch_py_description(
+         'pmb2_gazebo', ['launch', 'pmb2_spawn.launch.py'])
+    # pmb2_bringup = include_launch_py_description(
+    #     'pmb2_bringup', ['launch', 'pmb2_bringup.launch.py'])
+
+    # Spawn the robot after launching Gazebo
+    ordered_launch_event3 = RegisterEventHandler(
+        OnProcessStart(
+            target_action=gzserver_process,
+            on_start=[
+                LogInfo(msg='Spawn robot in 8 seconds...'),
+                TimerAction(
+                    period=8.0,
+                    actions=[pmb2_spawn],
+                )
+            ]
+        )
+    )
+
     # hunav_manager node
     hunav_manager_node = Node(
         package='hunav_agent_manager',
@@ -227,6 +250,19 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': True}]
     )
+    ordered_launch_event4 = RegisterEventHandler(
+        OnProcessStart(
+            target_action=gzserver_process,
+            on_start=[
+                LogInfo(msg='Start hunav manager node in 8 seconds...'),
+                TimerAction(
+                    period=5.0,
+                    actions=[hunav_manager_node],
+                )
+            ]
+        )
+    )
+
 
     metrics_file = PathJoinSubstitution([
         FindPackageShare('hunav_evaluator'),
@@ -243,13 +279,13 @@ def generate_launch_description():
     )
 
     # DO NOT Launch this if any robot localization is launched
-    static_tf_node = Node(
-        package = "tf2_ros", 
-        executable = "static_transform_publisher",
-        output='screen',
-        arguments = ['0', '0', '0', '0', '0', '0', 'map', 'odom']
-        # other option: arguments = "0 0 0 0 0 0 pmb2 base_footprint".split(' ')
-    )
+    # static_tf_node = Node(
+    #     package = "tf2_ros", 
+    #     executable = "static_transform_publisher",
+    #     output='screen',
+    #     arguments = ['0', '0', '0', '0', '0', '0', 'map', 'odom']
+    #     # other option: arguments = "0 0 0 0 0 0 pmb2 base_footprint".split(' ')
+    # )
 
     declare_agents_conf_file = DeclareLaunchArgument(
         'configuration_file', default_value='agents.yaml',
@@ -280,7 +316,7 @@ def generate_launch_description():
         description='Name of the global frame in which the position of the agents are provided'
     )
     declare_use_navgoal = DeclareLaunchArgument(
-        'use_navgoal_to_start', default_value='true',
+        'use_navgoal_to_start', default_value='false',
         description='Whether to start the agents movements when a navigation goal is received or not'
     )
     declare_navgoal_topic = DeclareLaunchArgument(
@@ -311,11 +347,27 @@ def generate_launch_description():
             description='The robot initial pitch angle in the world')
     declare_arg_pY = DeclareLaunchArgument('gzpose_Y', default_value='0.0',
             description='The robot initial yaw angle in the world')
-    declare_arg_laser = DeclareLaunchArgument('laser_model', default_value='sick-571-gpu',
+    declare_arg_laser = DeclareLaunchArgument('laser_model', default_value='no-laser',
             description='the laser model to be used')
     declare_arg_rgbd = DeclareLaunchArgument('rgbd_sensors', default_value='false',
             description='whether to use rgbd cameras or not')
 
+    declare_init = DeclareLaunchArgument(
+        'init', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_init.so"'
+        )
+    declare_factory = DeclareLaunchArgument(
+        'factory', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_factory.so"'
+        )
+    declare_force_system = DeclareLaunchArgument(
+        'force_system', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_force_system.so"'
+        )
+    declare_state = DeclareLaunchArgument(
+        'state', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_state.so"'
+        )
     
 
     ld = LaunchDescription()
@@ -324,6 +376,7 @@ def generate_launch_description():
     ld.add_action(set_env_gazebo_model)
     ld.add_action(set_env_gazebo_resource)
     ld.add_action(set_env_gazebo_plugin)
+    
 
     # Declare the launch arguments
     ld.add_action(declare_agents_conf_file)
@@ -338,14 +391,19 @@ def generate_launch_description():
     ld.add_action(declare_ignore_models)
     ld.add_action(declare_arg_verbose)
     ld.add_action(declare_arg_namespace)
-    ld.add_action(declare_arg_laser)
-    ld.add_action(declare_arg_rgbd)
-    ld.add_action(declare_arg_px)
-    ld.add_action(declare_arg_py)
-    ld.add_action(declare_arg_pz)
-    ld.add_action(declare_arg_pR)
-    ld.add_action(declare_arg_pP)
-    ld.add_action(declare_arg_pY)
+    # ld.add_action(declare_arg_laser)
+    # ld.add_action(declare_arg_rgbd)
+    # ld.add_action(declare_arg_px)
+    # ld.add_action(declare_arg_py)
+    # ld.add_action(declare_arg_pz)
+    # ld.add_action(declare_arg_pR)
+    # ld.add_action(declare_arg_pP)
+    # ld.add_action(declare_arg_pY)
+    ld.add_action(declare_init)
+    ld.add_action(declare_factory)
+    ld.add_action(declare_force_system)
+    ld.add_action(declare_state)
+
 
     # Generate the world with the agents
     # launch hunav_loader and the WorldGenerator
@@ -356,7 +414,8 @@ def generate_launch_description():
     ld.add_action(ordered_launch_event)
 
     # hunav behavior manager node
-    ld.add_action(hunav_manager_node)
+    #ld.add_action(hunav_manager_node)
+    
     # hunav evaluator
     ld.add_action(hunav_evaluator_node)
 
@@ -366,8 +425,13 @@ def generate_launch_description():
     ld.add_action(ordered_launch_event2)
     #ld.add_action(gzclient_process)
 
-    # spawn robot in Gazebo
-    ld.add_action(spawn_robot)
+   # ld.add_action(pmb2_state_publisher)
+   #ld.add_action(spawn_entity)
+
+
+    ld.add_action(ordered_launch_event3)  
+    ld.add_action(ordered_launch_event4)
+    
 
 
     return ld
@@ -380,3 +444,10 @@ def _boolean_command(arg):
     cmd = ['"--', arg, '" if "true" == "', LaunchConfiguration(arg), '" else ""']
     py_cmd = PythonExpression(cmd)
     return py_cmd
+
+def _plugin_command(arg):
+    cmd = ['"-s', 'libgazebo_ros_', arg, '.so" if "true" == "',
+           LaunchConfiguration(arg), '" else ""']
+    py_cmd = PythonExpression(cmd)
+    return py_cmd
+

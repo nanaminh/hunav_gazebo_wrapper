@@ -298,7 +298,7 @@ def generate_launch_description():
             description='The robot initial pitch angle in the world')
     declare_arg_pY = DeclareLaunchArgument('gzpose_Y', default_value='0.0',
             description='The robot initial yaw angle in the world')
-    declare_arg_laser = DeclareLaunchArgument('laser_model', default_value='sick-571-gpu',
+    declare_arg_laser = DeclareLaunchArgument('laser_model', default_value='no-laser',
             description='the laser model to be used')
     declare_arg_rgbd = DeclareLaunchArgument('rgbd_sensors', default_value='false',
             description='whether to use rgbd cameras or not')

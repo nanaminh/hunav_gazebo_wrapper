@@ -2,7 +2,7 @@ from os import path
 from os import environ
 from os import pathsep
 from scripts import GazeboRosPaths
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, get_package_prefix
 
 from launch import LaunchDescription
 from launch.actions import (IncludeLaunchDescription, SetEnvironmentVariable, 
@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from launch.event_handlers import (OnExecutionComplete, OnProcessExit,
                                 OnProcessIO, OnProcessStart, OnShutdown)
+from launch_pal.include_utils import include_launch_py_description
 
 def generate_launch_description():
 
@@ -100,19 +101,30 @@ def generate_launch_description():
     model, plugin, media = GazeboRosPaths.get_paths()
     #print('model:', model)
 
-    if 'GAZEBO_MODEL_PATH' in environ:
-        model += pathsep+environ['GAZEBO_MODEL_PATH']
+    # if 'GAZEBO_MODEL_PATH' in environ:
+    #     model += pathsep+environ['GAZEBO_MODEL_PATH']
     if 'GAZEBO_PLUGIN_PATH' in environ:
         plugin += pathsep+environ['GAZEBO_PLUGIN_PATH']
-    if 'GAZEBO_RESOURCE_PATH' in environ:
-        media += pathsep+environ['GAZEBO_RESOURCE_PATH']
+    # if 'GAZEBO_RESOURCE_PATH' in environ:
+    #     media += pathsep+environ['GAZEBO_RESOURCE_PATH']
 
-    env = {
-        'GAZEBO_MODEL_PATH': model,
-        'GAZEBO_PLUGIN_PATH': plugin,
-        'GAZEBO_RESOURCE_PATH': media
-    }
-    print('env:', env)
+    # env = {
+    #     'GAZEBO_MODEL_PATH': model,
+    #     'GAZEBO_PLUGIN_PATH': plugin,
+    #     'GAZEBO_RESOURCE_PATH': media
+    # }
+    # print('env:', env)
+
+    # Add pmb2 to the GAZEBO_MODEL_PATH
+
+    pmb2_pkg_path = get_package_prefix('pmb2_description')
+    pmb2_model_path = path.join(pmb2_pkg_path, "share")
+    pmb2_resource_path = pmb2_pkg_path
+
+    # declare_robot_name = DeclareLaunchArgument(
+    # 'robot_name', default_value='pmb2',
+    # description='Gazebo model name'
+    # )   
 
     set_env_gazebo_model = SetEnvironmentVariable(
         name='GAZEBO_MODEL_PATH', 
@@ -127,6 +139,9 @@ def generate_launch_description():
         value=[EnvironmentVariable('GAZEBO_PLUGIN_PATH'), plugin]
     )
 
+    spawn_robot = include_launch_py_description(
+        'pmb2_gazebo', ['launch', 'pmb2_spawn.launch.py'])
+
     # the world generator will create this world
     # in this path
     world_path = PathJoinSubstitution([
@@ -137,20 +152,26 @@ def generate_launch_description():
 
     # Gazebo server
     gzserver_cmd = [
-        use_nvidia_gpu,
-        'gzserver ',
+        #use_nvidia_gpu,
+        'gzserver',
         #'--pause ',
          world_path, 
         _boolean_command('verbose'), '',
-        '-s ', 'libgazebo_ros_init.so',
-        '-s ', 'libgazebo_ros_factory.so',
+        # '-s ', 'libgazebo_ros_init.so',
+        # '-s ', 'libgazebo_ros_factory.so',
+        # '-s ', 'libgazebo_ros_state.so',
+        # '-s ', 'libgazebo_ros_force_system.so',
+        _plugin_command('init'), ' ',
+        _plugin_command('factory'), ' ',
+        _plugin_command('state'), ' ',
+        _plugin_command('force_system'), ' ',
         '--ros-args',
         '--params-file', config_file,
     ]
 
     # Gazebo client
     gzclient_cmd = [
-        use_nvidia_gpu,
+        #use_nvidia_gpu,
         'gzclient',
         _boolean_command('verbose'), ' ',
     ]
@@ -254,11 +275,26 @@ def generate_launch_description():
         description='list of Gazebo models that the agents should ignore as obstacles as the ground_plane. Indicate the models with a blank space between them'
     )
     declare_arg_verbose = DeclareLaunchArgument(
-        'verbose', default_value='false',
+        'verbose', default_value='true',
         description='Set "true" to increase messages written to terminal.'
     )
+    declare_init = DeclareLaunchArgument(
+        'init', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_init.so"'
+        )
+    declare_factory = DeclareLaunchArgument(
+        'factory', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_factory.so"'
+        )
+    declare_force_system = DeclareLaunchArgument(
+        'force_system', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_force_system.so"'
+        )
+    declare_state = DeclareLaunchArgument(
+        'state', default_value='true',
+        description='Set "false" not to load "libgazebo_ros_state.so"'
+        )
     
-
     ld = LaunchDescription()
 
     # set environment variables
@@ -277,6 +313,10 @@ def generate_launch_description():
     ld.add_action(declare_use_navgoal)
     ld.add_action(declare_ignore_models)
     ld.add_action(declare_arg_verbose)
+    ld.add_action(declare_init)
+    ld.add_action(declare_factory)
+    ld.add_action(declare_force_system)
+    ld.add_action(declare_state)
 
     # Generate the world with the agents
     # launch hunav_loader and the WorldGenerator
@@ -298,9 +338,7 @@ def generate_launch_description():
     #ld.add_action(gzclient_process)
 
     # spawn robot in Gazebo
-    # ld.add_action(spawn_robot)
-
-    
+    #ld.add_action(spawn_robot)
 
     return ld
 
@@ -310,5 +348,11 @@ def generate_launch_description():
 # Add boolean commands if true
 def _boolean_command(arg):
     cmd = ['"--', arg, '" if "true" == "', LaunchConfiguration(arg), '" else ""']
+    py_cmd = PythonExpression(cmd)
+    return py_cmd
+
+def _plugin_command(arg):
+    cmd = ['"-s', 'libgazebo_ros_', arg, '.so" if "true" == "',
+           LaunchConfiguration(arg), '" else ""']
     py_cmd = PythonExpression(cmd)
     return py_cmd
